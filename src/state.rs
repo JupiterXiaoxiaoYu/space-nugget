@@ -76,7 +76,7 @@ impl GlobalState {
         let counter = state.counter;
         let txsize = state.txsize;
         let withdraw_size = SettlementInfo::settlement_size();
-        if counter % 600 == 0 || txsize >= 40 || withdraw_size > 40 {
+        if counter % 1000 == 0 || txsize >= 200 || withdraw_size > 40 {
             state.txsize = 0;
             return true;
         } else {
@@ -190,7 +190,7 @@ impl Transaction {
             Some(_) => Err(ERROR_PLAYER_ALREADY_EXIST),
             None => {
                 let mut player = Player::new(pkey);
-                player.data.balance = 100000;
+                player.data.balance = 0;
                 player.store();
                 Ok(())
             }
