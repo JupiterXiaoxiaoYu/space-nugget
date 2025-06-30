@@ -1,7 +1,4 @@
 use serde::Serialize;
-
-use crate::state::GLOBAL_STATE;
-
 lazy_static::lazy_static! {
     pub static ref ADMIN_PUBKEY: [u64; 4] = {
         let bytes = include_bytes!("./admin.pubkey");
@@ -13,26 +10,27 @@ lazy_static::lazy_static! {
 
 #[derive(Serialize, Clone)]
 pub struct Config {
-    actions: [&'static str; 1],
-    name: [&'static str; 1],
+    version: &'static str,
 }
+
+pub const MARKET_DEAL_DELAY: u64 = 24 * 60 * 60 / 5;
 
 lazy_static::lazy_static! {
     pub static ref CONFIG: Config = Config {
-        actions: ["nugget"],
-        name: ["nugget"],
+        version: "1.1",
     };
 }
 
 impl Config {
     pub fn to_json_string() -> String {
-        let meme_list: Vec<u64> = vec![];
-        serde_json::to_string(&meme_list).unwrap()
+        serde_json::to_string(&CONFIG.clone()).unwrap()
     }
 
     // enable timer tick
     pub fn autotick() -> bool {
-        //true
-        false
+        true
     }
 }
+
+pub const NUGGET_INFO:u64 = 1;
+pub const MARKET_INFO:u64 = 2;

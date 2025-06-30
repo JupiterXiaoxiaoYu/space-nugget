@@ -1,20 +1,22 @@
 use crate::config::ADMIN_PUBKEY;
-use crate::nugget::NuggetInfo;
 use crate::player::{Owner, GamePlayer};
 use crate::settlement::SettlementInfo;
 use crate::Player;
+use crate::nugget::Leaderboard;
+use crate::nugget::LeaderboardInfo;
 use serde::Serialize;
 use std::cell::RefCell;
-use zkwasm_rest_abi::StorageData;
 use zkwasm_rest_abi::MERKLE_MAP;
+use zkwasm_rest_abi::StorageData;
 use zkwasm_rust_sdk::require;
+use zkwasm_rest_abi::enforce;
 use crate::command::Command;
 use crate::command::Activity;
 use crate::command::Deposit;
 use crate::command::Withdraw;
 use crate::command::CommandHandler;
 use crate::error::*;
-use zkwasm_rest_convention::{clear_events, Position};
+use zkwasm_rest_convention::clear_events;
 
 
 #[derive(Serialize)]
@@ -22,24 +24,31 @@ pub struct GlobalState {
     pub total: u64,
     pub counter: u64,
     pub txsize: u64,
-    pub airdrop: u64,
+    pub treasure: u64,
+    pub cash: u64,
+    pub leaderboard: Leaderboard,
 }
 
 #[derive(Serialize)]
 pub struct QueryState {
     total: u64,
     counter: u64,
-    airdrop: u64,
+    treasure: u64,
+    cash: u64,
+    leaderboard: Leaderboard,
 }
 
 const TICK: u64 = 0;
 const INSTALL_PLAYER: u64 = 1;
+const WITHDRAW: u64 = 2;
+const DEPOSIT: u64 = 3;
+
 const EXPLORE_NUGGET: u64 = 4;
 const SELL_NUGGET: u64 = 5;
 const BID_NUGGET: u64 = 6;
 const CREATE_NUGGET: u64 = 7;
-const WITHDRAW: u64 = 8;
-const DEPOSIT: u64 = 9;
+const RECYCLE_NUGGET: u64 = 8;
+const LIST_NUGGET: u64 = 9;
 
 
 
@@ -49,15 +58,19 @@ impl GlobalState {
             total: 0,
             counter: 0,
             txsize: 0,
-            airdrop: 10000000
+            treasure: 0,
+            cash: 0,
+            leaderboard: Leaderboard::default(),
         }
     }
 
     pub fn snapshot() -> String {
         let total = GLOBAL_STATE.0.borrow().total;
         let counter = GLOBAL_STATE.0.borrow().counter;
-        let airdrop = GLOBAL_STATE.0.borrow().airdrop;
-        serde_json::to_string(&QueryState { counter, total, airdrop }).unwrap()
+        let treasure = GLOBAL_STATE.0.borrow().treasure;
+        let cash = GLOBAL_STATE.0.borrow().cash;
+        let leaderboard = GLOBAL_STATE.0.borrow().leaderboard.clone();
+        serde_json::to_string(&QueryState { counter, total, treasure, cash, leaderboard}).unwrap()
     }
 
     pub fn get_state(pid: Vec<u64>) -> String {
@@ -66,10 +79,12 @@ impl GlobalState {
     }
 
     pub fn preempt() -> bool {
-        let counter = GLOBAL_STATE.0.borrow().counter;
-        let txsize = GLOBAL_STATE.0.borrow().txsize;
+        let mut state = GLOBAL_STATE.0.borrow_mut();
+        let counter = state.counter;
+        let txsize = state.txsize;
         let withdraw_size = SettlementInfo::settlement_size();
-        if counter % 600 == 0 || txsize >= 100 || withdraw_size > 40 {
+        if counter % 1000 == 0 || txsize >= 200 || withdraw_size > 40 {
+            state.txsize = 0;
             return true;
         } else {
             return false;
@@ -87,8 +102,13 @@ impl GlobalState {
     pub fn store_into_kvpair(&self) {
         let mut v = vec![];
         v.push(self.counter);
-        v.push(self.airdrop);
         v.push(self.total);
+        v.push(self.treasure);
+        v.push(self.cash);
+        v.push(self.leaderboard.nuggets.len() as u64);
+        for nugget in self.leaderboard.nuggets.iter() {
+            nugget.to_data(&mut v);
+        }
         let kvpair = unsafe { &mut MERKLE_MAP };
         kvpair.set(&[0, 0, 0, 0], v.as_slice());
     }
@@ -99,11 +119,20 @@ impl GlobalState {
         if !data.is_empty() {
             let mut u64data = data.iter_mut();
             let counter = *u64data.next().unwrap();
-            let airdrop = *u64data.next().unwrap();
             let total = *u64data.next().unwrap();
+            let treasure = *u64data.next().unwrap();
+            let cash = *u64data.next().unwrap();
             self.counter = counter;
-            self.airdrop = airdrop;
             self.total = total;
+            self.treasure = treasure;
+            self.cash = cash;
+            if let Some(l) = u64data.next() {
+                for _ in 0..(*l) {
+                    self.leaderboard.nuggets.push(LeaderboardInfo::from_data(&mut u64data));
+                }
+            } else {
+                ()
+            }
         }
     }
 
@@ -145,8 +174,9 @@ impl Transaction {
                 data: [params[2], params[3], params[4]]
             })
         } else if command == DEPOSIT {
+            enforce(params[3] == 0, "check deposit index"); // only token index 0 is supported
             Command::Deposit (Deposit {
-                data: [params[2], params[3], params[4]]
+                data: [params[1], params[2], params[4]]
             })
         } else if command == INSTALL_PLAYER {
             Command::InstallPlayer
@@ -154,6 +184,10 @@ impl Transaction {
             Command::Activity (Activity::Explore(params[1]))
         } else if command == SELL_NUGGET {
             Command::Activity (Activity::Sell(params[1]))
+        } else if command == RECYCLE_NUGGET {
+            Command::Activity (Activity::Recycle(params[1]))
+        } else if command == LIST_NUGGET {
+            Command::Activity (Activity::List(params[1], params[2]))
         } else if command == BID_NUGGET {
             Command::Activity (Activity::Bid(params[1], params[2]))
         } else if command == CREATE_NUGGET {
@@ -174,12 +208,7 @@ impl Transaction {
             Some(_) => Err(ERROR_PLAYER_ALREADY_EXIST),
             None => {
                 let mut player = Player::new(pkey);
-                if GLOBAL_STATE.0.borrow().airdrop > 500 {
-                    player.data.balance = 500;
-                    GLOBAL_STATE.0.borrow_mut().airdrop -= 500;
-                } else {
-                    player.data.balance = 0;
-                }
+                player.data.balance = 0;
                 player.store();
                 Ok(())
             }
@@ -196,7 +225,7 @@ impl Transaction {
 
     pub fn process(&self, pkey: &[u64; 4], rand: &[u64; 4]) -> Vec<u64> {
         let pid = GamePlayer::pkey_to_pid(&pkey);
-        let counter = GLOBAL_STATE.0.borrow_mut().counter;
+        let counter = GLOBAL_STATE.0.borrow().counter;
         let e = match &self.command {
             Command::Tick => {
                 unsafe { require(*pkey == *ADMIN_PUBKEY) };
@@ -215,16 +244,15 @@ impl Transaction {
                     .map_or_else(|e| e, |_| 0)
             },
         };
-        match self.command {
-            Command::Tick => (),
-            _ => {
-                self.inc_tx_number();
-                self.tick();
+        if e == 0 {
+            match self.command {
+                Command::Tick => (),
+                _ => {
+                    self.inc_tx_number();
+                }
             }
         }
-        let txsize = GLOBAL_STATE.0.borrow_mut().txsize;
-        unsafe {
-            clear_events(vec![e as u64, txsize])
-        }
+        let txsize = GLOBAL_STATE.0.borrow().txsize;
+        clear_events(vec![e as u64, txsize])
     }
 }
