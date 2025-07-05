@@ -1,5 +1,5 @@
 use std::{ops::BitXor, slice::IterMut};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use zkwasm_rest_abi::StorageData;
 use zkwasm_rest_convention::IndexedObject;
 use crate::error::*;
@@ -14,13 +14,31 @@ pub struct NuggetInfo {
     pub marketid: u64, // the associated makret id for this object. None if zero
 }
 
+fn serialize_u64_as_string<S>(n: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&n.to_string())
+}
+
+
+fn serialize_u64_array_as_string_array<S>(arr: &[u64; 2], serializer: S) -> Result<S::Ok, S::Error>
+where
+S: Serializer,
+{
+    let string_vec: Vec<String> = arr.iter().map(|n| n.to_string()).collect();
+    string_vec.serialize(serializer)
+}
+
 #[derive(Clone, Serialize, Default)]
 pub struct LeaderboardInfo {
     pub id: u64,
-    pub attributes: [u8; 8],
+    #[serde(serialize_with = "serialize_u64_as_string")]
+    pub attributes: u64,
     pub feature: u64,
     pub sysprice: u64,
     pub start: u64,
+    #[serde(serialize_with = "serialize_u64_array_as_string_array")]
     pub owner: [u64; 2]
 }
 
@@ -33,7 +51,7 @@ impl Leaderboard {
     pub fn update_board(&mut self, nugget: &NuggetInfo, owner: [u64; 2], count: u64 ) {
         let linfo = LeaderboardInfo {
             id: nugget.id,
-            attributes: nugget.attributes,
+            attributes: u64::from_le_bytes(nugget.attributes),
             feature: nugget.feature,
             sysprice: nugget.sysprice,
             owner,
@@ -80,7 +98,7 @@ impl StorageData for NuggetInfo {
 impl StorageData for LeaderboardInfo {
     fn from_data(u64data: &mut IterMut<u64>) -> Self {
         let id = *u64data.next().unwrap();
-        let attributes = (*u64data.next().unwrap()).to_le_bytes();
+        let attributes = *u64data.next().unwrap();
         let feature = *u64data.next().unwrap();
         let sysprice = *u64data.next().unwrap();
         let start = *u64data.next().unwrap();
@@ -96,7 +114,7 @@ impl StorageData for LeaderboardInfo {
     }
     fn to_data(&self, data: &mut Vec<u64>) {
         data.push(self.id);
-        data.push(u64::from_le_bytes(self.attributes));
+        data.push(self.attributes);
         data.push(self.feature);
         data.push(self.sysprice);
         data.push(self.start);
@@ -106,22 +124,22 @@ impl StorageData for LeaderboardInfo {
 }
 
 const EXPLORE_WEIGHT_HIGH:[u8; 64] = [
-    2,2,1,1,1,0,0,0,
     2,2,2,1,1,1,0,0,
     3,2,2,2,1,1,1,0,
-    4,3,2,2,2,1,1,1,
-    4,4,3,3,2,2,1,1,
-    5,5,4,3,3,3,2,1,
+    3,3,2,2,2,1,1,1,
+    4,3,3,2,2,2,1,1,
+    4,4,3,3,3,2,2,1,
+    5,5,4,3,3,3,2,2,
     7,6,5,4,3,3,3,2,
     9,8,6,5,4,4,3,3,
 ];
 
 const EXPLORE_WEIGHT_LOW:[u8; 64] = [
     2,2,2,1,1,1,0,0,
-    2,2,2,2,1,1,1,0,
-    3,2,2,2,2,1,1,1,
-    4,3,2,2,2,2,1,1,
-    5,4,3,3,2,2,2,1,
+    3,2,2,2,1,1,1,0,
+    3,3,2,2,2,1,1,1,
+    4,3,3,2,2,2,1,1,
+    5,4,3,3,3,2,2,1,
     6,5,4,4,3,3,2,2,
     8,7,6,5,4,3,3,2,
     9,8,7,6,5,4,3,3,
