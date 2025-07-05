@@ -114,7 +114,6 @@ const InnerNuggetObjectSchema = new mongoose.Schema({
     marketid: {type: BigInt, required: true},
 });
 
-
 const MarketObjectSchema = Market.createMarketSchema(InnerNuggetObjectSchema);
 
 NuggetObjectSchema.pre('init', ObjectEvent.uint64FetchPlugin);
