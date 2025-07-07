@@ -193,8 +193,10 @@ impl CommandHandler for Activity {
                                 let c = nugget.start;
                                 if counter > c {
                                     let reward = counter - c;
-                                    s.leaderboard.nuggets.swap_remove(*index as usize);
+                                    s.leaderboard.nuggets.remove(*index as usize);
                                     player.data.inc_balance(reward);
+                                    s.cash += reward;
+                                    player.store();
                                     Ok(())
                                 } else {
                                     Err(INVALID_NUGGET_INDEX)
